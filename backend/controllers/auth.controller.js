@@ -1,27 +1,42 @@
+// backend/controllers/auth.controller.js
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
 import axios from 'axios'
-import { RefreshToken, User, UserStats } from '../models/index.js'
+import { RefreshToken, User, UserStats, Device, Room, SyncSession } from '../models/index.js'
 import { sendEmail } from '../config/index.js'
 
-const CLIENT_ID = process.env.NODE_ENV === 'development' ? process.env.GOOGLE_CLIENT_ID : process.env.GOOGLE_CLIENT_ID_PROD
-const CLIENT_SECRET = process.env.NODE_ENV === 'development' ? process.env.GOOGLE_CLIENT_SECRET : process.env.GOOGLE_CLIENT_SECRET_PROD
-const REDIRECT_URI = process.env.NODE_ENV === 'development' ? process.env.GOOGLE_REDIRECT_URI : process.env.GOOGLE_REDIRECT_URI_PROD
-const CLIENT_URL = process.env.NODE_ENV === 'development' ? process.env.DEV_URL : process.env.CLIENT_URL
+// Constants
+const CLIENT_ID = process.env.NODE_ENV === 'development'
+    ? process.env.GOOGLE_CLIENT_ID
+    : process.env.GOOGLE_CLIENT_ID_PROD
+const CLIENT_SECRET = process.env.NODE_ENV === 'development'
+    ? process.env.GOOGLE_CLIENT_SECRET
+    : process.env.GOOGLE_CLIENT_SECRET_PROD
+const REDIRECT_URI = process.env.NODE_ENV === 'development'
+    ? process.env.GOOGLE_REDIRECT_URI
+    : process.env.GOOGLE_REDIRECT_URI_PROD
+const CLIENT_URL = process.env.NODE_ENV === 'development'
+    ? process.env.DEV_URL
+    : process.env.CLIENT_URL
 
+// ======================
+// HELPER FUNCTIONS
+// ======================
+
+/**
+ * Generate JWT token
+ */
 const generateToken = (userId, extraPayload = {}) => {
     return jwt.sign(
-        {
-            userId,
-            ...extraPayload
-        },
+        { userId, ...extraPayload },
         process.env.JWT_SECRET,
-        {
-            expiresIn: process.env.JWT_EXPIRE || '7d'
-        }
+        { expiresIn: process.env.JWT_EXPIRE || '7d' }
     )
 }
 
+/**
+ * Generate and store refresh token
+ */
 const generateRefreshToken = async (userId) => {
     const token = crypto.randomBytes(64).toString('hex')
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
@@ -37,9 +52,12 @@ const generateRefreshToken = async (userId) => {
     return token
 }
 
+/**
+ * Set token cookies in response
+ */
 const setTokenCookies = (res, token, refreshToken) => {
-    const isProduction = process.env.NODE_ENV === 'production';
-    const sameSite = isProduction ? 'none' : 'lax';
+    const isProduction = process.env.NODE_ENV === 'production'
+    const sameSite = isProduction ? 'none' : 'lax'
 
     const cookieOptions = {
         httpOnly: true,
@@ -56,11 +74,129 @@ const setTokenCookies = (res, token, refreshToken) => {
     })
 }
 
-const registerController = async (req, res, next) => {
+/**
+ * Get device information from request
+ */
+const getDeviceInfo = (req) => {
+    const fallback = 'Unknown'
+    const ua = req.useragent || {}
+
+    return {
+        platform: ua.platform || fallback,
+        browser: ua.browser || fallback,
+        os: ua.os || fallback,
+        version: ua.version || fallback,
+        deviceType: getDeviceType(ua),
+        userAgentString: req.headers['user-agent'] || ''
+    }
+}
+
+/**
+ * Determine device type
+ */
+const getDeviceType = (ua) => {
+    if (!ua) return 'other'
+    if (ua.isMobile) return 'mobile'
+    if (ua.isTablet) return 'tablet'
+    if (ua.isDesktop) return 'desktop'
+    if (ua.isSmartTV) return 'smart_tv'
+    if (ua.isBot) return 'bot'
+    return 'other'
+}
+
+/**
+ * Handle device management (create or update)
+ */
+const handleDevice = async (userId, req) => {
+    const deviceInfo = getDeviceInfo(req)
+    const deviceName = `${deviceInfo.platform} ${deviceInfo.browser}`.trim()
+
+    let device = await Device.findOne({
+        userId: userId,
+        deviceName: deviceName
+    })
+
+    if (!device) {
+        device = await Device.create({
+            userId: userId,
+            deviceId: crypto.randomUUID(),
+            deviceName: deviceName,
+            deviceType: deviceInfo.deviceType,
+            platform: deviceInfo.platform,
+            browser: deviceInfo.browser,
+            os: deviceInfo.os,
+            version: deviceInfo.version,
+            isOnline: true,
+            userAgent: deviceInfo.userAgentString,
+            lastActive: new Date()
+        })
+    } else {
+        device.isOnline = true
+        device.lastActive = new Date()
+        await device.save()
+    }
+
+    return device
+}
+
+/**
+ * Generate unique username
+ */
+const generateUniqueUsername = async (baseName) => {
+    let username = baseName
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '')
+        .substring(0, 20)
+
+    while (username.length < 5) {
+        username += Math.floor(Math.random() * 10)
+    }
+
+    let isUnique = false
+    let counter = 1
+    let finalUsername = username
+
+    while (!isUnique) {
+        const existing = await User.findOne({ username: finalUsername })
+        if (!existing) {
+            isUnique = true
+        } else {
+            const suffix = String(counter)
+            const baseLength = 20 - suffix.length
+            finalUsername = username.substring(0, baseLength) + suffix
+            counter++
+        }
+    }
+
+    return finalUsername
+}
+
+/**
+ * Send email asynchronously with error handling
+ */
+const sendEmailAsync = async (email, type, ...args) => {
+    try {
+        const result = await sendEmail(email, type, ...args)
+        if (!result.success) {
+            console.error(`Email (${type}) send failed:`, result.error)
+        }
+    } catch (err) {
+        console.error(`Async email (${type}) error:`, err)
+    }
+}
+
+// ======================
+// CONTROLLERS
+// ======================
+
+/**
+ * Register new user
+ */
+const registerController = async (req, res) => {
     try {
         const { email, password, username, fullName } = req.validated
 
-        // Check if user already exists
+        // Check existing user
         const existingUser = await User.findOne({
             $or: [
                 { email: email.toLowerCase() },
@@ -77,38 +213,23 @@ const registerController = async (req, res, next) => {
             })
         }
 
-        // Generate OTP
-        const otp = User.generateOTP()
-        const otpExpires = new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
-
-        // Create user
+        // Create user with OTP
         const user = new User({
             email: email.toLowerCase(),
             password,
             username,
             fullName,
             otp: {
-                code: otp,
-                expiresAt: otpExpires
+                code: User.generateOTP(),
+                expiresAt: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
             }
         })
 
         await user.save()
-
-        // Initialize user stats
         await UserStats.initializeUserStats(user._id)
 
-        // Send verification email
-        setImmediate(async () => {
-            try {
-                const emailResult = await sendEmail(user.email, 'verification', otp, user.username, user._id)
-                if (!emailResult.success) {
-                    console.error('Email send failed:', emailResult.error)
-                }
-            } catch (err) {
-                console.error('Async email error:', err)
-            }
-        })
+        // Send verification email (async)
+        sendEmailAsync(user.email, 'verification', user.otp.code, user.username, user._id)
 
         res.status(201).json({
             success: true,
@@ -116,10 +237,7 @@ const registerController = async (req, res, next) => {
             data: {
                 userId: user._id,
                 email: user.email,
-                username: user.username,
-                isVerified: user.isVerified,
-                // otp,
-                // otpExpires
+                username: user.username
             }
         })
 
@@ -142,80 +260,39 @@ const registerController = async (req, res, next) => {
     }
 }
 
-const verifyOTPController = async (req, res, next) => {
+/**
+ * Verify OTP and complete registration
+ */
+const verifyOTPController = async (req, res) => {
     try {
         const { userId, otp } = req.validated
-
-        // Find user with OTP
         const user = await User.findById(userId).select('+otp.code +otp.expiresAt')
 
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            })
-        }
+        // Validate user and OTP
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' })
+        if (user.isVerified) return res.status(400).json({ success: false, message: 'Account already verified' })
+        if (!user.otp?.code || user.otp.code !== otp) return res.status(400).json({ success: false, message: 'Invalid OTP code' })
+        if (user.otp.expiresAt < new Date()) return res.status(400).json({ success: false, message: 'OTP code has expired' })
 
-        // Check if already verified
-        if (user.isVerified) {
-            return res.status(400).json({
-                success: false,
-                message: 'Account already verified'
-            })
-        }
-
-        // Check if OTP exists and is valid
-        if (!user.otp?.code || user.otp.code !== otp) {
-            // console.log(otp, user.otp.code)
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid OTP code'
-            })
-        }
-
-        // Check if OTP is expired
-        if (user.otp.expiresAt < new Date()) {
-            return res.status(400).json({
-                success: false,
-                message: 'OTP code has expired. Please request a new one.'
-            })
-        }
-
-        // Verify user
+        // Complete verification
         user.isVerified = true
         user.otp = undefined
         await user.save()
 
-        // Send welcome email
-        setImmediate(async () => {
-            try {
-                await sendEmail(user.email, 'welcome', user.username)
-            } catch (err) {
-                console.error('Async welcome email error:', err)
-            }
-        })
-
-
-        // Generate tokens
-        const token = generateToken(user._id)
+        // Create device and tokens
+        const device = await handleDevice(user._id, req)
+        const token = generateToken(user._id, { deviceId: device._id })
         const refreshToken = await generateRefreshToken(user._id)
-
-        // Set cookies
         setTokenCookies(res, token, refreshToken)
+
+        // Send welcome email (async)
+        sendEmailAsync(user.email, 'welcome', user.username)
 
         res.status(200).json({
             success: true,
-            message: 'Email verified successfully! Welcome to our platform.',
+            message: 'Email verified successfully!',
             data: {
-                user: {
-                    id: user._id,
-                    email: user.email,
-                    username: user.username,
-                    fullName: user.fullName,
-                    avatar: user.avatar,
-                    bio: user.bio,
-                    isVerified: user.isVerified
-                },
+                user: user.toAuthJSON(),
                 token,
                 refreshToken
             }
@@ -230,72 +307,43 @@ const verifyOTPController = async (req, res, next) => {
     }
 }
 
-const loginController = async (req, res, next) => {
+/**
+ * User login
+ */
+const loginController = async (req, res) => {
     try {
         const { identifier, password } = req.validated
-
-        // Find user by email or username
         const user = await User.findByCredentials(identifier)
 
-        if (!user) {
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid credentials'
-            })
+        // Validate credentials
+        if (!user || !(await user.comparePassword(password))) {
+            return res.status(401).json({ success: false, message: 'Invalid credentials' })
         }
-
-        // Check password
-        const isValidPassword = await user.comparePassword(password)
-
-        if (!isValidPassword) {
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid credentials'
-            })
-        }
-
-        // Check if user is banned
         if (user.isBanned) {
             return res.status(403).json({
                 success: false,
                 message: `Account suspended${user.banReason ? `: ${user.banReason}` : ''}`
             })
         }
-
-        // Check if user is active
         if (!user.isActive) {
-            return res.status(403).json({
-                success: false,
-                message: 'Account deactivated. Please contact support.'
-            })
+            return res.status(403).json({ success: false, message: 'Account deactivated' })
         }
 
-        // Update last login
+        // Update last login and create device
         user.lastLogin = new Date()
         await user.save()
+        const device = await handleDevice(user._id, req)
 
         // Generate tokens
-        const token = generateToken(user._id)
+        const token = generateToken(user._id, { deviceId: device._id })
         const refreshToken = await generateRefreshToken(user._id)
-
-        // Set cookies
         setTokenCookies(res, token, refreshToken)
 
         res.status(200).json({
             success: true,
             message: 'Login successful',
             data: {
-                user: {
-                    id: user._id,
-                    email: user.email,
-                    username: user.username,
-                    fullName: user.fullName,
-                    avatar: user.avatar,
-                    bio: user.bio,
-                    verified: user.isVerified,
-                    privacy: user.privacy,
-                    lastLogin: user.lastLogin
-                },
+                user: user.toAuthJSON(),
                 token,
                 refreshToken
             }
@@ -303,47 +351,29 @@ const loginController = async (req, res, next) => {
 
     } catch (error) {
         console.error('Login error:', error)
-        res.status(500).json({
-            success: false,
-            message: 'Login failed. Please try again.'
-        })
+        res.status(500).json({ success: false, message: 'Login failed' })
     }
 }
 
-const forgotPasswordController = async (req, res, next) => {
+/**
+ * Request password reset
+ */
+const forgotPasswordController = async (req, res) => {
     try {
         const { email } = req.validated
-
         const user = await User.findOne({ email: email.toLowerCase() })
 
-        if (!user) {
-            // Don't reveal if email exists or not
-            return res.status(200).json({
-                success: true,
-                message: 'If the email exists, a password reset link has been sent.'
-            })
+        if (user) {
+            // Generate reset token
+            user.resetPasswordToken = crypto.randomBytes(32).toString('hex')
+            user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+            await user.save()
+
+            // Send reset email (async)
+            sendEmailAsync(user.email, 'resetPassword', user.resetPasswordToken, user.username)
         }
 
-        // Generate reset token
-        const resetToken = crypto.randomBytes(32).toString('hex')
-        const resetExpires = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
-
-        user.resetPasswordToken = resetToken
-        user.resetPasswordExpires = resetExpires
-        await user.save()
-
-        // Send reset email
-        setImmediate(async () => {
-            try {
-                const emailResult = await sendEmail(user.email, 'resetPassword', resetToken, user.username)
-                if (!emailResult.success) {
-                    console.error('Failed to send reset email:', emailResult.error)
-                }
-            } catch (err) {
-                console.error('Async reset password email error:', err)
-            }
-        })
-
+        // Always return success to prevent email enumeration
         res.status(200).json({
             success: true,
             message: 'If the email exists, a password reset link has been sent.'
@@ -351,39 +381,54 @@ const forgotPasswordController = async (req, res, next) => {
 
     } catch (error) {
         console.error('Forgot password error:', error)
-        res.status(500).json({
-            success: false,
-            message: 'Failed to process request. Please try again.'
-        })
+        res.status(500).json({ success: false, message: 'Failed to process request' })
     }
 }
 
-const getOTPController = async (req, res, next) => {
+/**
+ * Complete password reset
+ */
+const resetPasswordController = async (req, res) => {
     try {
-        const { userId } = req.validated
-
-        // Find user by ID
-        const user = await User.findById(userId).select('+otp.code +otp.expiresAt')
+        const { token, password } = req.validated
+        const user = await User.findOne({
+            resetPasswordToken: token,
+            resetPasswordExpires: { $gt: Date.now() }
+        }).select('+resetPasswordToken +resetPasswordExpires')
 
         if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            })
+            return res.status(400).json({ success: false, message: 'Invalid or expired reset token' })
         }
 
-        // Check if user is already verified
-        if (user.isVerified) {
-            return res.status(400).json({
-                success: false,
-                message: 'Account is already verified'
-            })
-        }
+        // Update password and clear reset token
+        user.password = password
+        user.resetPasswordToken = undefined
+        user.resetPasswordExpires = undefined
+        await user.save()
 
-        // Check if current OTP is still valid (within 2 minutes of expiry to prevent spam)
+        res.status(200).json({ success: true, message: 'Password reset successful' })
+
+    } catch (error) {
+        console.error('Reset password error:', error)
+        res.status(500).json({ success: false, message: 'Password reset failed' })
+    }
+}
+
+/**
+ * Request new OTP
+ */
+const getOTPController = async (req, res) => {
+    try {
+        const { userId } = req.validated
+        const user = await User.findById(userId).select('+otp.code +otp.expiresAt')
+
+        // Validate user
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' })
+        if (user.isVerified) return res.status(400).json({ success: false, message: 'Account already verified' })
+
+        // Check OTP request rate limit
         const now = new Date()
         const twoMinutesFromNow = new Date(now.getTime() + 2 * 60 * 1000)
-
         if (user.otp?.expiresAt && user.otp.expiresAt > twoMinutesFromNow) {
             const timeLeft = Math.ceil((user.otp.expiresAt - now) / 1000 / 60)
             return res.status(429).json({
@@ -392,7 +437,7 @@ const getOTPController = async (req, res, next) => {
             })
         }
 
-        // Rate limiting: Check if user has requested OTP recently (last 1 minute)
+        // Check recent OTP requests
         const oneMinuteAgo = new Date(now.getTime() - 60 * 1000)
         if (user.otpRequestedAt && user.otpRequestedAt > oneMinuteAgo) {
             return res.status(429).json({
@@ -405,30 +450,16 @@ const getOTPController = async (req, res, next) => {
         const newOtp = User.generateOTP()
         const otpExpires = new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
 
-        // Update user with new OTP and request timestamp
-        user.otp = {
-            code: newOtp,
-            expiresAt: otpExpires
-        }
+        user.otp = { code: newOtp, expiresAt: otpExpires }
         user.otpRequestedAt = now
-
         await user.save()
 
-        // Send verification email asynchronously
-        setImmediate(async () => {
-            try {
-                const emailResult = await sendEmail(user.email, 'verification', newOtp, user.username, user._id)
-                if (!emailResult.success) {
-                    console.error('Failed to send OTP email:', emailResult.error)
-                }
-            } catch (err) {
-                console.error('Async OTP email error:', err)
-            }
-        })
+        // Send OTP email (async)
+        sendEmailAsync(user.email, 'verification', newOtp, user.username, user._id)
 
         res.status(200).json({
             success: true,
-            message: 'New verification code sent to your email address',
+            message: 'New verification code sent',
             data: {
                 userId: user._id,
                 email: user.email,
@@ -438,128 +469,35 @@ const getOTPController = async (req, res, next) => {
 
     } catch (error) {
         console.error('Get OTP error:', error)
-
-        if (error.name === 'CastError') {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid user ID format'
-            })
-        }
-
-        res.status(500).json({
-            success: false,
-            message: 'Failed to send OTP. Please try again.'
-        })
+        res.status(500).json({ success: false, message: 'Failed to send OTP' })
     }
 }
 
-const resetPasswordController = async (req, res, next) => {
-    try {
-        const { token, password } = req.validated
-
-        if (password.length < 8) {
-            return res.status(400).json({
-                success: false,
-                message: 'Password must be at least 8 characters long'
-            })
-        }
-
-        // Find user by reset token
-        const user = await User.findOne({
-            resetPasswordToken: token,
-            resetPasswordExpires: { $gt: Date.now() }
-        }).select('+resetPasswordToken +resetPasswordExpires')
-
-        if (!user) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid or expired reset token'
-            })
-        }
-
-        // Reset password
-        user.password = password
-        user.resetPasswordToken = undefined
-        user.resetPasswordExpires = undefined
-        await user.save()
-
-        res.status(200).json({
-            success: true,
-            message: 'Password reset successful. You can now login with your new password.'
-        })
-
-    } catch (error) {
-        console.error('Reset password error:', error)
-        res.status(500).json({
-            success: false,
-            message: 'Password reset failed. Please try again.'
-        })
-    }
-}
-
-const getUserDetailsController = async (req, res, next) => {
-    try {
-        const { userId } = req.query;
-
-        if (!userId) {
-            return res.status(400).json({
-                success: false,
-                message: 'User ID is required'
-            });
-        }
-
-        // Find user and stats in parallel
-        const [user, userStats] = await Promise.all([
-            User.findById(userId).select('+otp.expiresAt'),
-            UserStats.findOne({ userId })
-        ]);
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        // Combine the data
-        const responseData = {
-            user: user.toObject(),
-            stats: userStats ? userStats.toObject() : null
-        };
-
-        res.status(200).json({
-            success: true,
-            data: responseData
-        });
-
-    } catch (error) {
-        console.error('Error fetching user details:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-}
-
-const refreshTokenController = async (req, res, next) => {
+/**
+ * Refresh access token
+ */
+const refreshTokenController = async (req, res) => {
     const incomingToken = req.cookies.refreshToken
-
     if (!incomingToken) {
         return res.status(401).json({ success: false, message: 'Refresh token missing' })
     }
 
     try {
         const existing = await RefreshToken.findOne({ token: incomingToken })
-
         if (!existing) {
-            return res.status(403).json({ success: false, message: 'Invalid or expired refresh token' })
+            return res.status(403).json({ success: false, message: 'Invalid refresh token' })
         }
 
-        const userId = existing.userId
+        // Find or create device
+        const device = await Device.findOne({
+            userId: existing.userId,
+            deviceName: `${req.useragent.platform} ${req.useragent.browser}`
+        }) || await handleDevice(existing.userId, req)
 
-        await RefreshToken.deleteOne({ _id: existing._id }) // Rotate
-        const newRefreshToken = await generateRefreshToken(userId)
-        const newAccessToken = generateToken(userId)
+        // Rotate refresh token
+        await RefreshToken.deleteOne({ _id: existing._id })
+        const newRefreshToken = await generateRefreshToken(existing.userId)
+        const newAccessToken = generateToken(existing.userId, { deviceId: device._id })
 
         setTokenCookies(res, newAccessToken, newRefreshToken)
 
@@ -568,67 +506,110 @@ const refreshTokenController = async (req, res, next) => {
             token: newAccessToken,
             refreshToken: newRefreshToken
         })
+
     } catch (err) {
         console.error('Refresh error:', err)
         res.status(500).json({ success: false, message: 'Token refresh failed' })
     }
 }
 
+/**
+ * User logout
+ */
 const logoutController = async (req, res) => {
     const token = req.cookies.refreshToken
+    const deviceId = req.deviceId
 
-    if (typeof token === 'string' && token.trim() !== '') {
-        try {
-            await RefreshToken.deleteOne({ token });
-        } catch (error) {
-            console.error('Error deleting refresh token:', error);
+    try {
+        if (token) await RefreshToken.deleteOne({ token })
+        if (deviceId) {
+            await Device.findByIdAndUpdate(deviceId, {
+                isOnline: false,
+                socketId: null,
+                lastActive: new Date()
+            })
         }
-    } else {
-        console.warn('Invalid or missing refresh token in cookies:', token);
+    } catch (error) {
+        console.error('Logout cleanup error:', error)
     }
 
     res.clearCookie('token')
     res.clearCookie('refreshToken')
-
-    res.status(200).json({
-        success: true,
-        message: 'Logged out successfully'
-    })
+    res.status(200).json({ success: true, message: 'Logged out successfully' })
 }
 
+/**
+ * Delete user account
+ */
 const deleteAccountController = async (req, res) => {
     const userId = req.userId
 
     try {
+        // Delete user devices
         await Device.deleteMany({ userId })
 
+        // Handle rooms created by user
         const roomsCreated = await Room.find({ createdBy: userId }).select('_id')
         const roomIdsCreated = roomsCreated.map(room => room._id)
 
         await Room.deleteMany({ createdBy: userId })
         await SyncSession.deleteMany({ roomId: { $in: roomIdsCreated } })
 
+        // Remove user from participant lists
         await Room.updateMany(
             { 'participants.user': userId },
             { $pull: { participants: { user: userId } } }
         )
 
-        // Optionally: Remove sync sessions for rooms where user was participant
-        // You might want to keep sync sessions if room is still active,
-        // or handle this differently depending on your app logic.
-
+        // Delete user account
         await User.findByIdAndDelete(userId)
 
-        res.status(200).json({ message: 'User account and related data deleted successfully.' })
+        res.status(200).json({ message: 'Account deleted successfully' })
     } catch (error) {
-        console.error('Error deleting user data:', error)
-        res.status(500).json({ error: 'Failed to delete user account data.' })
+        console.error('Account deletion error:', error)
+        res.status(500).json({ error: 'Failed to delete account' })
     }
 }
 
+/**
+ * Get user details
+ */
+const getUserDetailsController = async (req, res) => {
+    try {
+        const { userId } = req.query
+        if (!userId) {
+            return res.status(400).json({ success: false, message: 'User ID required' })
+        }
+
+        const [user, userStats] = await Promise.all([
+            User.findById(userId),
+            UserStats.findOne({ userId })
+        ])
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' })
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                user: user.toObject(),
+                stats: userStats ? userStats.toObject() : null
+            }
+        })
+
+    } catch (error) {
+        console.error('User details error:', error)
+        res.status(500).json({ success: false, message: 'Internal server error' })
+    }
+}
+
+/**
+ * Initiate Google OAuth flow
+ */
 const googleLoginController = (req, res) => {
     if (!CLIENT_ID || !REDIRECT_URI) {
-        return res.status(500).json({ message: 'Google login is unavailable' })
+        return res.status(500).json({ message: 'Google login unavailable' })
     }
 
     const state = crypto.randomUUID()
@@ -643,19 +624,22 @@ const googleLoginController = (req, res) => {
     res.redirect(url)
 }
 
+/**
+ * Handle Google OAuth callback
+ */
 const googleCallbackController = async (req, res) => {
-    const { code, state } = req.query;
-    const storedState = req.cookies.oauth_state;
+    const { code, state } = req.query
+    const storedState = req.cookies.oauth_state
 
     if (!state || state !== storedState) {
-        console.warn('Invalid or missing OAuth state');
-        return res.redirect(`${CLIENT_URL}/auth/error?message=Invalid+OAuth+state`);
+        console.warn('Invalid OAuth state')
+        return res.redirect(`${CLIENT_URL}/auth/error?message=Invalid+OAuth+state`)
     }
 
-    res.clearCookie('oauth_state');
+    res.clearCookie('oauth_state')
 
     try {
-        // Exchange authorization code for access token
+        // Exchange code for tokens
         const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', {
             client_id: CLIENT_ID,
             client_secret: CLIENT_SECRET,
@@ -664,120 +648,71 @@ const googleCallbackController = async (req, res) => {
             grant_type: 'authorization_code',
         })
 
-        const { access_token } = tokenResponse.data
-
-        // Get user profile using the access token
+        // Get user profile
         const profileResponse = await axios.get('https://www.googleapis.com/oauth2/v1/userinfo', {
-            headers: { Authorization: `Bearer ${access_token}` },
+            headers: { Authorization: `Bearer ${tokenResponse.data.access_token}` },
         })
 
         const googleUser = profileResponse.data
-
-        if (!googleUser || !googleUser.id) {
-            return res.status(400).json({
-                success: false,
-                message: 'Google authentication failed',
-            })
+        if (!googleUser?.id) {
+            throw new Error('Google authentication failed')
         }
 
+        // Find or create user
         let user = await User.findOne({ googleId: googleUser.id })
-
-        if (user) {
-            user.lastLogin = new Date()
-            await user.save()
-        } else {
+        if (!user) {
             const existingUser = await User.findOne({ email: googleUser.email })
 
             if (existingUser) {
+                // Link Google account to existing user
                 existingUser.googleId = googleUser.id
                 existingUser.isVerified = true
-                existingUser.lastLogin = new Date()
                 if (!existingUser.avatar && googleUser.picture) {
                     existingUser.avatar = googleUser.picture
                 }
                 user = await existingUser.save()
             } else {
+                // Create new user
                 user = new User({
                     email: googleUser.email,
                     username: await generateUniqueUsername(googleUser.name || googleUser.email),
                     fullName: googleUser.name || googleUser.email.split('@')[0],
                     avatar: googleUser.picture,
                     googleId: googleUser.id,
-                    isVerified: true,
-                    lastLogin: new Date(),
+                    isVerified: true
                 })
-
                 await user.save()
-
                 await UserStats.initializeUserStats(user._id)
-                setImmediate(async () => {
-                    try {
-                        const emailResult = await sendEmail(user.email, 'welcome', user.username)
-                        if (!emailResult.success) {
-                            console.error('Failed to send Welcome email:', emailResult.error)
-                        }
-                    } catch (err) {
-                        console.error('Async Welcome email error:', err)
-                    }
-                })
-                await sendEmail(user.email, 'welcome', user.username)
+                sendEmailAsync(user.email, 'welcome', user.username)
             }
         }
 
-        user = await User.findOne({ googleId: googleUser.id })
+        // Update last login
+        user.lastLogin = new Date()
+        await user.save()
+
+        // Handle device
+        const device = await handleDevice(user._id, req)
 
         // Generate tokens
         const token = generateToken(user._id, {
-            email: user.email,
-            username: user.username,
-            fullName: user.fullName,
-            avatar: user.avatar,
-            verified: user.isVerified,
-            bio: user.bio || '',
+            ...user.toAuthJSON(),
+            deviceId: device._id
         })
         const refreshToken = await generateRefreshToken(user._id)
-
-        // Set token cookies
         setTokenCookies(res, token, refreshToken)
 
-        const redirectUrl = `${CLIENT_URL}/auth/success?token=${token}`
-        res.redirect(redirectUrl)
+        res.redirect(`${CLIENT_URL}/auth/success?token=${token}`)
 
     } catch (error) {
         console.error('Google callback error:', error.response?.data || error.message)
-        const errorUrl = `${CLIENT_URL}/auth/error?message=Authentication failed`
-        res.redirect(errorUrl)
+        res.redirect(`${CLIENT_URL}/auth/error?message=Authentication failed`)
     }
 }
 
-const generateUniqueUsername = async (baseName) => {
-    let username = baseName
-        .toLowerCase()
-        .replace(/[^a-z0-9_]/g, '')
-        .substring(0, 20);
-
-    while (username.length < 5) {
-        username += Math.floor(Math.random() * 10);
-    }
-
-    let isUnique = false;
-    let counter = 1;
-    let finalUsername = username;
-
-    while (!isUnique) {
-        const existing = await User.findOne({ username: finalUsername });
-        if (!existing) {
-            isUnique = true;
-        } else {
-            const suffix = String(counter);
-            const baseLength = 20 - suffix.length;
-            finalUsername = username.substring(0, baseLength) + suffix;
-            counter++;
-        }
-    }
-
-    return finalUsername;
-};
+// ======================
+// EXPORTS
+// ======================
 
 export {
     registerController,
