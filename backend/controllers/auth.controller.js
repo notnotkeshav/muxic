@@ -4,6 +4,17 @@ import crypto from 'crypto'
 import axios from 'axios'
 import { RefreshToken, User, UserStats, Device, Room, SyncSession } from '../models/index.js'
 import { sendEmail } from '../config/index.js'
+import {
+    AppError,
+    NotFoundError,
+    ForbiddenError,
+    BadRequestError,
+    UnauthorizedError,
+    ConflictError,
+    ValidationError,
+    InternalServerError,
+    RateLimitError
+} from '../errors/index.js'
 
 // Constants
 const CLIENT_ID = process.env.NODE_ENV === 'development'
@@ -185,6 +196,7 @@ const sendEmailAsync = async (email, type, ...args) => {
     }
 }
 
+
 // ======================
 // CONTROLLERS
 // ======================
@@ -192,7 +204,7 @@ const sendEmailAsync = async (email, type, ...args) => {
 /**
  * Register new user
  */
-const registerController = async (req, res) => {
+const registerController = async (req, res, next) => {
     try {
         const { email, password, username, fullName } = req.validated
 
@@ -205,12 +217,11 @@ const registerController = async (req, res) => {
         })
 
         if (existingUser) {
-            return res.status(409).json({
-                success: false,
-                message: existingUser.email === email.toLowerCase()
+            throw new ConflictError(
+                existingUser.email === email.toLowerCase()
                     ? 'Email already registered'
                     : 'Username already taken'
-            })
+            )
         }
 
         // Create user with OTP
@@ -242,37 +253,28 @@ const registerController = async (req, res) => {
         })
 
     } catch (error) {
-        console.error('Register error:', error)
-
         if (error.name === 'ValidationError') {
             const errors = Object.values(error.errors).map(err => err.message)
-            return res.status(400).json({
-                success: false,
-                message: 'Validation failed',
-                errors
-            })
+            next(new ValidationError('Validation failed', errors))
+        } else {
+            next(error)
         }
-
-        res.status(500).json({
-            success: false,
-            message: 'Registration failed. Please try again.'
-        })
     }
 }
 
 /**
  * Verify OTP and complete registration
  */
-const verifyOTPController = async (req, res) => {
+const verifyOTPController = async (req, res, next) => {
     try {
         const { userId, otp } = req.validated
         const user = await User.findById(userId).select('+otp.code +otp.expiresAt')
 
         // Validate user and OTP
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' })
-        if (user.isVerified) return res.status(400).json({ success: false, message: 'Account already verified' })
-        if (!user.otp?.code || user.otp.code !== otp) return res.status(400).json({ success: false, message: 'Invalid OTP code' })
-        if (user.otp.expiresAt < new Date()) return res.status(400).json({ success: false, message: 'OTP code has expired' })
+        if (!user) throw new NotFoundError('User not found')
+        if (user.isVerified) throw new BadRequestError('Account already verified')
+        if (!user.otp?.code || user.otp.code !== otp) throw new BadRequestError('Invalid OTP code')
+        if (user.otp.expiresAt < new Date()) throw new BadRequestError('OTP code has expired')
 
         // Complete verification
         user.isVerified = true
@@ -299,34 +301,29 @@ const verifyOTPController = async (req, res) => {
         })
 
     } catch (error) {
-        console.error('Verify OTP error:', error)
-        res.status(500).json({
-            success: false,
-            message: 'Verification failed. Please try again.'
-        })
+        next(error)
     }
 }
 
 /**
  * User login
  */
-const loginController = async (req, res) => {
+const loginController = async (req, res, next) => {
     try {
         const { identifier, password } = req.validated
         const user = await User.findByCredentials(identifier)
 
         // Validate credentials
         if (!user || !(await user.comparePassword(password))) {
-            return res.status(401).json({ success: false, message: 'Invalid credentials' })
+            throw new UnauthorizedError('Invalid credentials')
         }
         if (user.isBanned) {
-            return res.status(403).json({
-                success: false,
-                message: `Account suspended${user.banReason ? `: ${user.banReason}` : ''}`
-            })
+            throw new ForbiddenError(
+                `Account suspended${user.banReason ? `: ${user.banReason}` : ''}`
+            )
         }
         if (!user.isActive) {
-            return res.status(403).json({ success: false, message: 'Account deactivated' })
+            throw new ForbiddenError('Account deactivated')
         }
 
         // Update last login and create device
@@ -350,15 +347,14 @@ const loginController = async (req, res) => {
         })
 
     } catch (error) {
-        console.error('Login error:', error)
-        res.status(500).json({ success: false, message: 'Login failed' })
+        next(error)
     }
 }
 
 /**
  * Request password reset
  */
-const forgotPasswordController = async (req, res) => {
+const forgotPasswordController = async (req, res, next) => {
     try {
         const { email } = req.validated
         const user = await User.findOne({ email: email.toLowerCase() })
@@ -380,15 +376,14 @@ const forgotPasswordController = async (req, res) => {
         })
 
     } catch (error) {
-        console.error('Forgot password error:', error)
-        res.status(500).json({ success: false, message: 'Failed to process request' })
+        next(error)
     }
 }
 
 /**
  * Complete password reset
  */
-const resetPasswordController = async (req, res) => {
+const resetPasswordController = async (req, res, next) => {
     try {
         const { token, password } = req.validated
         const user = await User.findOne({
@@ -397,7 +392,7 @@ const resetPasswordController = async (req, res) => {
         }).select('+resetPasswordToken +resetPasswordExpires')
 
         if (!user) {
-            return res.status(400).json({ success: false, message: 'Invalid or expired reset token' })
+            throw new BadRequestError('Invalid or expired reset token')
         }
 
         // Update password and clear reset token
@@ -409,41 +404,36 @@ const resetPasswordController = async (req, res) => {
         res.status(200).json({ success: true, message: 'Password reset successful' })
 
     } catch (error) {
-        console.error('Reset password error:', error)
-        res.status(500).json({ success: false, message: 'Password reset failed' })
+        next(error)
     }
 }
 
 /**
  * Request new OTP
  */
-const getOTPController = async (req, res) => {
+const getOTPController = async (req, res, next) => {
     try {
         const { userId } = req.validated
         const user = await User.findById(userId).select('+otp.code +otp.expiresAt')
 
         // Validate user
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' })
-        if (user.isVerified) return res.status(400).json({ success: false, message: 'Account already verified' })
+        if (!user) throw new NotFoundError('User not found')
+        if (user.isVerified) throw new BadRequestError('Account already verified')
 
         // Check OTP request rate limit
         const now = new Date()
         const twoMinutesFromNow = new Date(now.getTime() + 2 * 60 * 1000)
         if (user.otp?.expiresAt && user.otp.expiresAt > twoMinutesFromNow) {
             const timeLeft = Math.ceil((user.otp.expiresAt - now) / 1000 / 60)
-            return res.status(429).json({
-                success: false,
-                message: `Please wait ${timeLeft} more minute(s) before requesting a new OTP`
-            })
+            throw new RateLimitError(
+                `Please wait ${timeLeft} more minute(s) before requesting a new OTP`
+            )
         }
 
         // Check recent OTP requests
         const oneMinuteAgo = new Date(now.getTime() - 60 * 1000)
         if (user.otpRequestedAt && user.otpRequestedAt > oneMinuteAgo) {
-            return res.status(429).json({
-                success: false,
-                message: 'Please wait at least 1 minute between OTP requests'
-            })
+            throw new RateLimitError('Please wait at least 1 minute between OTP requests')
         }
 
         // Generate new OTP
@@ -468,24 +458,23 @@ const getOTPController = async (req, res) => {
         })
 
     } catch (error) {
-        console.error('Get OTP error:', error)
-        res.status(500).json({ success: false, message: 'Failed to send OTP' })
+        next(error)
     }
 }
 
 /**
  * Refresh access token
  */
-const refreshTokenController = async (req, res) => {
+const refreshTokenController = async (req, res, next) => {
     const incomingToken = req.cookies.refreshToken
     if (!incomingToken) {
-        return res.status(401).json({ success: false, message: 'Refresh token missing' })
+        return next(new UnauthorizedError('Refresh token missing'))
     }
 
     try {
         const existing = await RefreshToken.findOne({ token: incomingToken })
         if (!existing) {
-            return res.status(403).json({ success: false, message: 'Invalid refresh token' })
+            throw new ForbiddenError('Invalid refresh token')
         }
 
         // Find or create device
@@ -507,16 +496,15 @@ const refreshTokenController = async (req, res) => {
             refreshToken: newRefreshToken
         })
 
-    } catch (err) {
-        console.error('Refresh error:', err)
-        res.status(500).json({ success: false, message: 'Token refresh failed' })
+    } catch (error) {
+        next(error)
     }
 }
 
 /**
  * User logout
  */
-const logoutController = async (req, res) => {
+const logoutController = async (req, res, next) => {
     const token = req.cookies.refreshToken
     const deviceId = req.deviceId
 
@@ -541,7 +529,7 @@ const logoutController = async (req, res) => {
 /**
  * Delete user account
  */
-const deleteAccountController = async (req, res) => {
+const deleteAccountController = async (req, res, next) => {
     const userId = req.userId
 
     try {
@@ -566,19 +554,18 @@ const deleteAccountController = async (req, res) => {
 
         res.status(200).json({ message: 'Account deleted successfully' })
     } catch (error) {
-        console.error('Account deletion error:', error)
-        res.status(500).json({ error: 'Failed to delete account' })
+        next(new InternalServerError('Failed to delete account'))
     }
 }
 
 /**
  * Get user details
  */
-const getUserDetailsController = async (req, res) => {
+const getUserDetailsController = async (req, res, next) => {
     try {
         const { userId } = req.query
         if (!userId) {
-            return res.status(400).json({ success: false, message: 'User ID required' })
+            throw new BadRequestError('User ID required')
         }
 
         const [user, userStats] = await Promise.all([
@@ -587,7 +574,7 @@ const getUserDetailsController = async (req, res) => {
         ])
 
         if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' })
+            throw new NotFoundError('User not found')
         }
 
         res.status(200).json({
@@ -599,35 +586,38 @@ const getUserDetailsController = async (req, res) => {
         })
 
     } catch (error) {
-        console.error('User details error:', error)
-        res.status(500).json({ success: false, message: 'Internal server error' })
+        next(error)
     }
 }
 
 /**
  * Initiate Google OAuth flow
  */
-const googleLoginController = (req, res) => {
-    if (!CLIENT_ID || !REDIRECT_URI) {
-        return res.status(500).json({ message: 'Google login unavailable' })
+const googleLoginController = (req, res, next) => {
+    try {
+        if (!CLIENT_ID || !REDIRECT_URI) {
+            throw new InternalServerError('Google login unavailable')
+        }
+
+        const state = crypto.randomUUID()
+        res.cookie('oauth_state', state, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            maxAge: 5 * 60 * 1000,
+        })
+
+        const url = `https://accounts.google.com/o/oauth2/v2/auth?state=${state}&client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=profile email&prompt=select_account`
+        res.redirect(url)
+    } catch (error) {
+        next(error)
     }
-
-    const state = crypto.randomUUID()
-    res.cookie('oauth_state', state, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 5 * 60 * 1000,
-    })
-
-    const url = `https://accounts.google.com/o/oauth2/v2/auth?state=${state}&client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=profile email&prompt=select_account`
-    res.redirect(url)
 }
 
 /**
  * Handle Google OAuth callback
  */
-const googleCallbackController = async (req, res) => {
+const googleCallbackController = async (req, res, next) => {
     const { code, state } = req.query
     const storedState = req.cookies.oauth_state
 
@@ -655,7 +645,7 @@ const googleCallbackController = async (req, res) => {
 
         const googleUser = profileResponse.data
         if (!googleUser?.id) {
-            throw new Error('Google authentication failed')
+            throw new UnauthorizedError('Google authentication failed')
         }
 
         // Find or create user

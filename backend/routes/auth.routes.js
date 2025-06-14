@@ -24,13 +24,13 @@ const authRouter = Router()
 authRouter.post('/register', validate(registerSchema), registerController)
 authRouter.post('/login', loginLimiter, validate(loginSchema), loginController)
 
-authRouter.get('/otp', authMiddleware, validate(getOTPSchema, 'query'), getOTPController)
+authRouter.get('/otp', authMiddleware, otpLimiter, validate(getOTPSchema, 'query'), getOTPController)
 authRouter.post('/verify', otpLimiter, validate(verifyOTPSchema), verifyOTPController)
 
 authRouter.put('/forgot-password', validate(forgotPasswordSchema), forgotPasswordController)
 authRouter.put('/reset-password', resetPasswordLimiter, validate(resetPasswordSchema), resetPasswordController)
 
-authRouter.get('/user', authMiddleware, getUserDetailsController)
+authRouter.get('/user', getUserDetailsController)
 authRouter.post('/refresh', refreshTokenController)
 authRouter.post('/logout', authMiddleware, logoutController)
 authRouter.delete('/delete', authMiddleware, deleteAccountController)
