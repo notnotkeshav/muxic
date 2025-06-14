@@ -12,13 +12,13 @@ const roomSchema = new mongoose.Schema({
     trim: true,
     maxlength: [50, 'Room name cannot exceed 50 characters']
   },
-  
+
   description: {
     type: String,
     maxlength: [200, 'Description cannot exceed 200 characters'],
     default: ''
   },
-  
+
   // Room Creator & Admin
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -29,7 +29,7 @@ const roomSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   }],
-  
+
   // Room Settings
   settings: {
     isPublic: {
@@ -59,7 +59,7 @@ const roomSchema = new mongoose.Schema({
       default: true
     }
   },
-  
+
   // Current State
   currentTrack: {
     title: String,
@@ -70,12 +70,11 @@ const roomSchema = new mongoose.Schema({
     thumbnail: String,
     source: {
       type: String,
-      // enum: ['spotify', 'youtube', 'soundcloud', 'local', 'other'],
-      enum: [ 'local'],
+      enum: ['spotify', 'youtube', 'soundcloud', 'local', 'other'],
       default: 'other'
     }
   },
-  
+
   // Playback State
   playback: {
     isPlaying: {
@@ -97,7 +96,7 @@ const roomSchema = new mongoose.Schema({
       default: Date.now
     }
   },
-  
+
   // Queue Management
   queue: [{
     title: String,
@@ -116,7 +115,7 @@ const roomSchema = new mongoose.Schema({
       default: Date.now
     }
   }],
-  
+
   // Participants
   participants: [{
     user: {
@@ -142,7 +141,7 @@ const roomSchema = new mongoose.Schema({
       ref: 'Device'
     }]
   }],
-  
+
   // Room Status
   isActive: {
     type: Boolean,
@@ -162,11 +161,12 @@ roomSchema.index({ 'participants.user': 1 })
 roomSchema.index({ isActive: 1, 'settings.isPublic': 1 })
 
 // Instance methods
-roomSchema.methods.addParticipant = function(userId, deviceIds = []) {
+roomSchema.methods.addParticipant = function (userId, role = 'particpant', deviceIds = []) {
   const existingParticipant = this.participants.find(p => p.user.toString() === userId.toString())
-  
+
   if (!existingParticipant) {
     this.participants.push({
+      role,
       user: userId,
       devices: deviceIds,
       joinedAt: new Date()
@@ -175,24 +175,24 @@ roomSchema.methods.addParticipant = function(userId, deviceIds = []) {
     existingParticipant.isOnline = true
     existingParticipant.devices = [...new Set([...existingParticipant.devices, ...deviceIds])]
   }
-  
+
   this.lastActivity = Date.now()
   return this.save()
 }
 
-roomSchema.methods.removeParticipant = function(userId) {
+roomSchema.methods.removeParticipant = function (userId) {
   this.participants = this.participants.filter(p => p.user.toString() !== userId.toString())
   this.lastActivity = Date.now()
   return this.save()
 }
 
-roomSchema.methods.updatePlayback = function(playbackState) {
+roomSchema.methods.updatePlayback = function (playbackState) {
   this.playback = { ...this.playback, ...playbackState, lastUpdated: Date.now() }
   this.lastActivity = Date.now()
   return this.save()
 }
 
-roomSchema.methods.addToQueue = function(track, userId) {
+roomSchema.methods.addToQueue = function (track, userId) {
   this.queue.push({
     ...track,
     addedBy: userId,
@@ -202,7 +202,7 @@ roomSchema.methods.addToQueue = function(track, userId) {
   return this.save()
 }
 
-roomSchema.methods.removeFromQueue = function(index) {
+roomSchema.methods.removeFromQueue = function (index) {
   if (index >= 0 && index < this.queue.length) {
     this.queue.splice(index, 1)
     this.lastActivity = Date.now()
@@ -211,7 +211,7 @@ roomSchema.methods.removeFromQueue = function(index) {
   return Promise.resolve(this)
 }
 
-roomSchema.methods.nextTrack = function() {
+roomSchema.methods.nextTrack = function () {
   if (this.queue.length > 0) {
     this.currentTrack = this.queue.shift()
     this.playback.currentTime = 0
@@ -223,21 +223,21 @@ roomSchema.methods.nextTrack = function() {
 }
 
 // Static methods
-roomSchema.statics.generateRoomId = function() {
+roomSchema.statics.generateRoomId = function () {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
 }
 
-roomSchema.statics.findPublicRooms = function(limit = 20) {
-  return this.find({ 
-    'settings.isPublic': true, 
-    isActive: true 
+roomSchema.statics.findPublicRooms = function (limit = 20) {
+  return this.find({
+    'settings.isPublic': true,
+    isActive: true
   })
-  .populate('createdBy', 'username avatar')
-  .sort({ lastActivity: -1 })
-  .limit(limit)
+    .populate('createdBy', 'username avatar')
+    .sort({ lastActivity: -1 })
+    .limit(limit)
 }
 
-roomSchema.statics.findUserRooms = function(userId) {
+roomSchema.statics.findUserRooms = function (userId) {
   return this.find({
     $or: [
       { createdBy: userId },
@@ -245,8 +245,8 @@ roomSchema.statics.findUserRooms = function(userId) {
     ],
     isActive: true
   })
-  .populate('createdBy', 'username avatar')
-  .sort({ lastActivity: -1 })
+    .populate('createdBy', 'username avatar')
+    .sort({ lastActivity: -1 })
 }
 
 export default mongoose.model('Room', roomSchema)
