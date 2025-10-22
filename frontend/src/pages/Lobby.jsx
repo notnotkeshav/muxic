@@ -10,6 +10,16 @@ const Lobby = () => {
   const navigate = useNavigate()
   const [user, setUser] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [activeForm, setActiveForm] = useState('join') // 'join' or 'create'
+  const [isLoading, setIsLoading] = useState(false)
+  const [formData, setFormData] = useState({
+    roomId: '',
+    password: '',
+    name: '',
+    description: '',
+    isPublic: true,
+    maxParticipants: 10
+  })
 
   const { isAuth, setIsAuth } = useContext(AuthContext)
 
@@ -26,7 +36,7 @@ const Lobby = () => {
     try {
       const response = await axios.post(
         `${import.meta.env.VITE_SERVER_URL}/auth/logout`,
-        {}, // optional request body, if any
+        {},
         {
           withCredentials: true,
           headers: {
@@ -35,7 +45,6 @@ const Lobby = () => {
         }
       )
 
-      // Only clear local storage AFTER successful logout
       if (response.data.success) {
         localStorage.removeItem('auth')
         localStorage.removeItem('user')
@@ -54,6 +63,77 @@ const Lobby = () => {
 
   const toggleSidebar = () => {
     setSidebarOpen(!sidebarOpen)
+  }
+
+  const handleInputChange = (e) => {
+    const { name, value, type, checked } = e.target
+    setFormData(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value
+    }))
+  }
+
+  const handleJoinRoom = async (e) => {
+    e.preventDefault()
+    setIsLoading(true)
+    try {
+      const { roomId, password } = formData
+      const response = await axios.post(
+        `${import.meta.env.VITE_SERVER_URL}/rooms/join`,
+        { roomId, password },
+        {
+          withCredentials: true,
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      )
+
+      if (response.data.success) {
+        toast.success('Successfully joined the room!')
+        navigate(`/room/${roomId}`)
+      }
+    } catch (error) {
+      console.error('Join room error:', error)
+      toast.error(error.response?.data?.message || 'Failed to join room. Please try again.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleCreateRoom = async (e) => {
+    e.preventDefault()
+    setIsLoading(true)
+    try {
+      const { name, description, isPublic, maxParticipants } = formData
+      const response = await axios.post(
+        `${import.meta.env.VITE_SERVER_URL}/rooms`,
+        { 
+          name, 
+          description, 
+          settings: { 
+            isPublic, 
+            maxParticipants 
+          } 
+        },
+        {
+          withCredentials: true,
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      )
+
+      if (response.data.success) {
+        toast.success('Room created successfully!')
+        navigate(`/room/${response.data.room.roomId}`)
+      }
+    } catch (error) {
+      console.error('Create room error:', error)
+      toast.error(error.response?.data?.message || 'Failed to create room. Please try again.')
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -78,7 +158,7 @@ const Lobby = () => {
         />
       )}
 
-      {/* Glass Morph Sidebar */}
+      {/* Sidebar (unchanged from your original) */}
       <aside className={`
         fixed lg:static inset-y-0 left-0 z-40 w-80 lg:w-85 
         transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} 
@@ -121,7 +201,7 @@ const Lobby = () => {
         {/* Create Room Button */}
         <button
           onClick={() => {
-            navigate('/create-room')
+            setActiveForm('create')
             setSidebarOpen(false)
           }}
           className="mb-6 lg:mb-8 flex items-center justify-center py-3 px-4 rounded-lg bg-emerald-600 dark:bg-emerald-500 text-white hover:bg-emerald-700 dark:hover:bg-emerald-600 transition-colors"
@@ -129,28 +209,6 @@ const Lobby = () => {
           <FiPlus className="mr-2" />
           Create Room
         </button>
-
-        {/* Recent Rooms */}
-        <div className="flex-1 overflow-y-auto">
-          <h2 className="text-sm font-semibold mb-4 text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-            Recent Rooms
-          </h2>
-          <ul className="space-y-2">
-            {['Lo-Fi Vibes', 'Jazz Night', 'Hip-Hop Beats'].map((room) => (
-              <li
-                key={room}
-                onClick={() => {
-                  navigate(`/room/${room.toLowerCase().replace(/\s+/g, '-')}`)
-                  setSidebarOpen(false)
-                }}
-                className="px-3 lg:px-4 py-3 rounded-lg hover:bg-white/50 dark:hover:bg-gray-700/50 text-gray-800 dark:text-gray-200 cursor-pointer transition-colors flex items-center"
-              >
-                <div className="w-2 h-2 rounded-full bg-emerald-500 mr-3 flex-shrink-0"></div>
-                <span className="truncate">{room}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
 
         {/* Bottom Actions */}
         <div className="mt-auto pt-4 space-y-3">
@@ -175,7 +233,7 @@ const Lobby = () => {
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto lg:ml-0">
+      <main className="flex-1 flex h-screen justify-center items-center p-4 sm:p-6 lg:p-8 overflow-y-auto lg:ml-0">
         {/* Email Verification Notice */}
         {user && !user.verified && (
           <div className="mb-4 p-4 w-full lg:w-1/2 rounded-lg backdrop-blur-md bg-yellow-500/10 dark:bg-yellow-600/10 border border-yellow-500/30 dark:border-yellow-600/30">
@@ -202,50 +260,142 @@ const Lobby = () => {
           <p className="text-base lg:text-lg text-gray-600 dark:text-gray-300 mb-6">
             Ready to sync some music with your friends? Join an existing room or create your own.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4">
+          
+          {/* Form Toggle Buttons */}
+          <div className="flex mb-6 border-b border-gray-200 dark:border-gray-700">
             <button
-              onClick={() => navigate('/join-room')}
-              className="px-6 py-3 rounded-lg bg-emerald-600 dark:bg-emerald-500 text-white hover:bg-emerald-700 dark:hover:bg-emerald-600 transition-colors text-center"
+              onClick={() => setActiveForm('join')}
+              className={`px-4 py-2 font-medium text-sm focus:outline-none ${activeForm === 'join' 
+                ? 'text-emerald-600 dark:text-emerald-400 border-b-2 border-emerald-500' 
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}
             >
               Join Room
             </button>
             <button
-              onClick={() => navigate('/create-room')}
-              className="px-6 py-3 rounded-lg border border-emerald-600 dark:border-emerald-500 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors text-center"
+              onClick={() => setActiveForm('create')}
+              className={`px-4 py-2 font-medium text-sm focus:outline-none ${activeForm === 'create' 
+                ? 'text-emerald-600 dark:text-emerald-400 border-b-2 border-emerald-500' 
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}
             >
               Create Room
             </button>
           </div>
-        </div>
 
-        {/* Recent Activity */}
-        <section className="mb-8 lg:mb-10">
-          <h2 className="text-lg lg:text-xl font-semibold text-gray-800 dark:text-white mb-4 lg:mb-6">Your Recent Activity</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-6">
-            {[1, 2, 3].map((item) => (
-              <div
-                key={item}
-                className="p-4 lg:p-6 rounded-xl backdrop-blur-lg bg-white/30 dark:bg-gray-800/30 border border-white/20 dark:border-gray-700/50 hover:shadow-lg transition-all cursor-pointer"
-              >
-                <div className="flex items-center mb-4">
-                  <div className="w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center mr-3 flex-shrink-0">
-                    <FiMusic className="text-emerald-600 dark:text-emerald-400 text-sm lg:text-base" />
-                  </div>
-                  <h3 className="font-medium text-gray-800 dark:text-white text-sm lg:text-base">Music Session #{item}</h3>
-                </div>
-                <p className="text-gray-600 dark:text-gray-300 text-sm mb-4">
-                  Last active {item} day{item !== 1 ? 's' : ''} ago
-                </p>
-                <button
-                  onClick={() => navigate(`/room/session-${item}`)}
-                  className="text-sm text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300"
-                >
-                  Rejoin Session →
-                </button>
+          {/* Join Room Form */}
+          {activeForm === 'join' && (
+            <form onSubmit={handleJoinRoom} className="space-y-4">
+              <div>
+                <label htmlFor="roomId" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Room ID
+                </label>
+                <input
+                  type="text"
+                  id="roomId"
+                  name="roomId"
+                  value={formData.roomId}
+                  onChange={handleInputChange}
+                  required
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/50 dark:bg-gray-700/50 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 dark:focus:ring-emerald-500 dark:focus:border-emerald-500"
+                  placeholder="Enter room ID"
+                />
               </div>
-            ))}
-          </div>
-        </section>
+              <div>
+                <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Password (if required)
+                </label>
+                <input
+                  type="password"
+                  id="password"
+                  name="password"
+                  value={formData.password}
+                  onChange={handleInputChange}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/50 dark:bg-gray-700/50 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 dark:focus:ring-emerald-500 dark:focus:border-emerald-500"
+                  placeholder="Enter password"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full px-6 py-3 rounded-lg bg-emerald-600 dark:bg-emerald-500 text-white hover:bg-emerald-700 dark:hover:bg-emerald-600 transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {isLoading ? 'Joining...' : 'Join Room'}
+              </button>
+            </form>
+          )}
+
+          {/* Create Room Form */}
+          {activeForm === 'create' && (
+            <form onSubmit={handleCreateRoom} className="space-y-4">
+              <div>
+                <label htmlFor="name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Room Name
+                </label>
+                <input
+                  type="text"
+                  id="name"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleInputChange}
+                  required
+                  minLength={3}
+                  maxLength={50}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/50 dark:bg-gray-700/50 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 dark:focus:ring-emerald-500 dark:focus:border-emerald-500"
+                  placeholder="Enter room name"
+                />
+              </div>
+              <div>
+                <label htmlFor="description" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Description (optional)
+                </label>
+                <textarea
+                  id="description"
+                  name="description"
+                  value={formData.description}
+                  onChange={handleInputChange}
+                  maxLength={200}
+                  rows={3}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/50 dark:bg-gray-700/50 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 dark:focus:ring-emerald-500 dark:focus:border-emerald-500"
+                  placeholder="Enter room description"
+                />
+              </div>
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="isPublic"
+                  name="isPublic"
+                  checked={formData.isPublic}
+                  onChange={handleInputChange}
+                  className="h-4 w-4 text-emerald-600 dark:text-emerald-500 focus:ring-emerald-500 border-gray-300 dark:border-gray-600 rounded"
+                />
+                <label htmlFor="isPublic" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+                  Public Room (visible to everyone)
+                </label>
+              </div>
+              <div>
+                <label htmlFor="maxParticipants" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Max Participants
+                </label>
+                <input
+                  type="number"
+                  id="maxParticipants"
+                  name="maxParticipants"
+                  value={formData.maxParticipants}
+                  onChange={handleInputChange}
+                  min={2}
+                  max={50}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/50 dark:bg-gray-700/50 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 dark:focus:ring-emerald-500 dark:focus:border-emerald-500"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full px-6 py-3 rounded-lg bg-emerald-600 dark:bg-emerald-500 text-white hover:bg-emerald-700 dark:hover:bg-emerald-600 transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {isLoading ? 'Creating...' : 'Create Room'}
+              </button>
+            </form>
+          )}
+        </div>
       </main>
     </div>
   )

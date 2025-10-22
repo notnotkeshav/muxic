@@ -4,6 +4,8 @@ import { configureApp, app } from "./app.js"
 import { wsConfig } from "./config/index.js"
 import { wsAuth } from "./middlewares/wsAuth.js"
 import { handleRoutes } from "./routes/ws.routes.js"
+import SocketRegistry from "./utils/websocket/SocketRegistry.js"
+
 const PORT = process.env.PORT || 3001
 
 const startServer = async () => {
@@ -22,7 +24,16 @@ const startServer = async () => {
                 // 1. Authenticate
                 await wsAuth(ws, req)
 
-                // // 2. Handle connection
+                // 2. Register connection
+                const roomId = new URL(req.url, `ws://${req.headers.host}`).searchParams.get('roomId')
+                
+                SocketRegistry.addConnection(ws, {
+                    userId: ws.userId,
+                    deviceId: ws.deviceId,
+                    roomId: roomId || null
+                })
+
+                // 3. Handle connection
                 await handleRoutes(ws)
 
             } catch (err) {

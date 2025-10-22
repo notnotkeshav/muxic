@@ -77,6 +77,13 @@ const errorHandler = (err, req, res, next) => {
     res.status(statusCode).json(response)
 }
 
+class WSError extends AppError {
+    constructor(message, code = 1008) {
+        super(message, 400)
+        this.wsCode = code // WebSocket close code
+    }
+}
+
 export default errorHandler
 
 export {
@@ -88,5 +95,6 @@ export {
     ConflictError,
     ValidationError,
     InternalServerError,
-    RateLimitError
+    RateLimitError,
+    WSError
 }

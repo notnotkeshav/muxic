@@ -1,23 +1,31 @@
-// backend/controllers/websocket/sync.controller.js
 import { Room, SyncSession } from '../../models/index.js'
 import { broadcastToRoom } from '../../services/websocket/broadcast.service.js'
+import { validateWsMessage } from '../../validations/ws.schema.js'
 
-/**
- * Handle synchronization-related WebSocket messages
- */
-export const handleSyncMessage = async (ws, message) => {
+export const handleSyncMessage = async (ws, rawMessage) => {
     try {
+        const message = validateWsMessage(rawMessage)
         const { userId, deviceId } = ws
+
+        if (!ws.roomId) throw new Error('Not in a room')
 
         switch (message.action) {
             case 'play':
-                return await handlePlay(ws, message.roomId, message.position)
+                return await handlePlay(ws, message.data?.position)
             case 'pause':
-                return await handlePause(ws, message.roomId)
+                return await handlePause(ws)
             case 'seek':
-                return await handleSeek(ws, message.roomId, message.position)
-            case 'queue':
-                return await handleQueueOperation(ws, message.roomId, message.operation, message.track)
+                return await handleSeek(ws, message.data?.position)
+            case 'volume':
+                return await handleVolume(ws, message.data?.volume)
+            case 'queue_add':
+                return await handleQueueAdd(ws, message.data?.track)
+            case 'queue_remove':
+                return await handleQueueRemove(ws, message.data?.trackId)
+            case 'queue_clear':
+                return await handleQueueClear(ws)
+            case 'track_next':
+                return await handleTrackNext(ws)
             default:
                 throw new Error('Invalid sync action')
         }
@@ -30,9 +38,8 @@ export const handleSyncMessage = async (ws, message) => {
     }
 }
 
-// Sync action handlers
-const handlePlay = async (ws, roomId, position) => {
-    const room = await Room.findByIdAndUpdate(roomId, {
+const handlePlay = async (ws, position = 0) => {
+    const room = await Room.findOneAndUpdate({ roomId: ws.roomId }, {
         $set: {
             'playback.isPlaying': true,
             'playback.currentTime': position,
@@ -40,99 +47,155 @@ const handlePlay = async (ws, roomId, position) => {
         }
     }, { new: true })
 
-    if (!room) throw new Error('Room not found')
+    // await SyncSession.logEvent(ws.roomId, 'play', ws.userId, ws.deviceId, { position })
 
-    // Log sync event
-    await SyncSession.logEvent(roomId, 'play', ws.userId, ws.deviceId, { position })
-
-    broadcastToRoom(roomId, {
+    await broadcastToRoom(ws.roomId, {
         type: 'sync:play',
-        position,
-        timestamp: Date.now(),
-        deviceId: ws.deviceId
+        data: {
+            position,
+            timestamp: Date.now(),
+            initiatedBy: ws.userId
+        }
     }, ws)
 }
 
-const handlePause = async (ws, roomId) => {
-    const room = await Room.findByIdAndUpdate(roomId, {
+const handlePause = async (ws) => {
+    const room = await Room.findOneAndUpdate({ roomId: ws.roomId }, {
         $set: {
             'playback.isPlaying': false,
             'playback.lastUpdated': new Date()
         }
     }, { new: true })
 
-    if (!room) throw new Error('Room not found')
+    // await SyncSession.logEvent(ws.roomId, 'pause', ws.userId, ws.deviceId)
 
-    // Log sync event
-    await SyncSession.logEvent(roomId, 'pause', ws.userId, ws.deviceId)
-
-    broadcastToRoom(roomId, {
+    await broadcastToRoom(ws.roomId, {
         type: 'sync:pause',
-        timestamp: Date.now(),
-        deviceId: ws.deviceId
+        data: {
+            timestamp: Date.now(),
+            initiatedBy: ws.userId
+        }
     }, ws)
 }
 
-const handleSeek = async (ws, roomId, position) => {
-    const room = await Room.findByIdAndUpdate(roomId, {
+const handleSeek = async (ws, position) => {
+    if (typeof position !== 'number') throw new Error('Invalid position')
+
+    const room = await Room.findOneAndUpdate({ roomId: ws.roomId }, {
         $set: {
             'playback.currentTime': position,
             'playback.lastUpdated': new Date()
         }
     }, { new: true })
 
-    if (!room) throw new Error('Room not found')
+    // await SyncSession.logEvent(ws.roomId, 'seek', ws.userId, ws.deviceId, { position })
 
-    // Log sync event
-    await SyncSession.logEvent(roomId, 'seek', ws.userId, ws.deviceId, { position })
-
-    broadcastToRoom(roomId, {
+    await broadcastToRoom(ws.roomId, {
         type: 'sync:seek',
-        position,
-        timestamp: Date.now(),
-        deviceId: ws.deviceId
+        data: {
+            position,
+            timestamp: Date.now(),
+            initiatedBy: ws.userId
+        }
     }, ws)
 }
 
-const handleQueueOperation = async (ws, roomId, operation, track) => {
-    let room
-
-    switch (operation) {
-        case 'add':
-            room = await Room.findByIdAndUpdate(roomId, {
-                $push: {
-                    queue: {
-                        ...track,
-                        addedBy: ws.userId,
-                        addedAt: new Date()
-                    }
-                }
-            }, { new: true })
-            break
-        case 'remove':
-            room = await Room.findByIdAndUpdate(roomId, {
-                $pull: {
-                    queue: { _id: track._id }
-                }
-            }, { new: true })
-            break
-        case 'reorder':
-            // Implement queue reordering logic
-            break
-        default:
-            throw new Error('Invalid queue operation')
+const handleVolume = async (ws, volume) => {
+    if (typeof volume !== 'number' || volume < 0 || volume > 100) {
+        throw new Error('Invalid volume')
     }
 
-    if (!room) throw new Error('Room not found')
-
-    broadcastToRoom(roomId, {
-        type: `sync:queue_${operation}`,
-        track,
-        timestamp: Date.now()
-    })
+    await broadcastToRoom(ws.roomId, {
+        type: 'sync:volume',
+        data: {
+            volume,
+            timestamp: Date.now(),
+            initiatedBy: ws.userId
+        }
+    }, ws)
 }
 
-// Export as named exports
+const handleQueueAdd = async (ws, track) => {
+    if (!track?.url) throw new Error('Invalid track data')
+
+    const room = await Room.findOneAndUpdate({ roomId: ws.roomId }, {
+        $push: {
+            queue: {
+                ...track,
+                addedBy: ws.userId,
+                addedAt: new Date()
+            }
+        }
+    }, { new: true })
+
+    await broadcastToRoom(ws.roomId, {
+        type: 'sync:queue_add',
+        data: {
+            track: {
+                ...track,
+                addedBy: ws.userId
+            },
+            timestamp: Date.now()
+        }
+    }, ws)
+}
+
+const handleQueueRemove = async (ws, trackId) => {
+    const room = await Room.findOneAndUpdate({ roomId: ws.roomId }, {
+        $pull: {
+            queue: { _id: trackId }
+        }
+    }, { new: true })
+
+    await broadcastToRoom(ws.roomId, {
+        type: 'sync:queue_remove',
+        data: {
+            trackId,
+            timestamp: Date.now(),
+            initiatedBy: ws.userId
+        }
+    }, ws)
+}
+
+const handleQueueClear = async (ws) => {
+    const room = await Room.findOneAndUpdate({ roomId: ws.roomId }, {
+        $set: {
+            queue: []
+        }
+    }, { new: true })
+
+    await broadcastToRoom(ws.roomId, {
+        type: 'sync:queue_clear',
+        data: {
+            timestamp: Date.now(),
+            initiatedBy: ws.userId
+        }
+    }, ws)
+}
+
+const handleTrackNext = async (ws) => {
+    const room = await Room.findOneAndUpdate({ roomId: ws.roomId }, {
+        $pop: {
+            queue: -1
+        }
+    }, { new: true })
+
+    if (!room.queue.length) {
+        throw new Error('Queue is empty')
+    }
+
+    const nextTrack = room.queue[0]
+
+    await broadcastToRoom(ws.roomId, {
+        type: 'sync:track_next',
+        data: {
+            track: nextTrack,
+            timestamp: Date.now(),
+            initiatedBy: ws.userId
+        }
+    }, ws)
+}
+
 export const syncController = {
     handleSyncMessage
 }

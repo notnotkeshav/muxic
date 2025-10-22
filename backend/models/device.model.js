@@ -20,7 +20,7 @@ const deviceSchema = new mongoose.Schema({
 
   deviceType: {
     type: String,
-    enum: ['mobile', 'desktop', 'tablet', 'smart_speaker', 'web', 'other'],
+    enum: ['mobile', 'desktop', 'tablet', 'smart_speaker', 'web', 'other', 'bot'],
     default: 'other'
   },
 
@@ -28,12 +28,12 @@ const deviceSchema = new mongoose.Schema({
     type: String, // iOS, Android, Windows, macOS, Linux, etc.
     default: 'unknown'
   },
-  
+
   browser: {
     type: String, // Chrome, Firefox, Safari, etc.
     default: null
   },
-  
+
   isOnline: {
     type: Boolean,
     default: false
@@ -48,7 +48,7 @@ const deviceSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
-  
+
   capabilities: {
     canPlay: {
       type: Boolean,
@@ -67,7 +67,7 @@ const deviceSchema = new mongoose.Schema({
       default: 100
     }
   },
-  
+
   settings: {
     autoSync: {
       type: Boolean,
@@ -93,26 +93,26 @@ deviceSchema.index({ userId: 1, isOnline: 1 })
 deviceSchema.index({ socketId: 1 })
 
 // Instance methods
-deviceSchema.methods.updateStatus = function(isOnline, socketId = null) {
+deviceSchema.methods.updateStatus = function (isOnline, socketId = null) {
   this.isOnline = isOnline
   this.lastActive = Date.now()
   if (socketId) this.socketId = socketId
   return this.save()
 }
 
-deviceSchema.methods.updateSettings = function(newSettings) {
+deviceSchema.methods.updateSettings = function (newSettings) {
   this.settings = { ...this.settings, ...newSettings }
   return this.save()
 }
 
 // Static methods
-deviceSchema.statics.findUserDevices = function(userId, onlineOnly = false) {
+deviceSchema.statics.findUserDevices = function (userId, onlineOnly = false) {
   const query = { userId }
   if (onlineOnly) query.isOnline = true
   return this.find(query).sort({ lastActive: -1 })
 }
 
-deviceSchema.statics.findBySocketId = function(socketId) {
+deviceSchema.statics.findBySocketId = function (socketId) {
   return this.findOne({ socketId })
 }
 

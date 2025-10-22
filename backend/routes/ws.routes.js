@@ -1,6 +1,5 @@
 import Device from '../models/device.model.js'
-// import { roomController } from '../controllers/websocket/room.controller.js'
-// import { syncController } from '../controllers/websocket/sync.controller.js'
+import { handleRoomMessage, handleSyncMessage, handlePresenceMessage } from '../controllers/websocket/index.js'
 import { setupHeartbeat } from '../utils/websocket/heartbeat.js'
 import { handleError, handleDisconnect } from '../utils/websocket/handlers.js'
 import { randomUUID } from 'crypto'
@@ -8,27 +7,35 @@ import { randomUUID } from 'crypto'
 
 export const handleRoutes = async (ws) => {
     try {
+        const socketId = randomUUID()
         await Device.findByIdAndUpdate(ws.deviceId, {
             isOnline: true,
-            socketId: randomUUID(),
+            socketId,
             lastActive: new Date()
         })
 
+        ws.socketId = socketId
         setupHeartbeat(ws)
 
         ws.on('message', async (data) => {
             try {
                 const message = JSON.parse(data)
 
-                if (!message?.type?.includes(':')) throw new Error('Malformed message type')
+                if (!message?.type) throw new Error('Message must contain type field')
+                if (!message?.action) throw new Error('Message must contain action field')
 
-                switch (message.type.split(':')[0]) {
+                switch (message.type) {
+                    case 'presence':
+                        await handlePresenceMessage(ws, message)
+                        break
                     case 'room':
-                        // return await roomController.handleRoomMessage(ws, message)
+                        await handleRoomMessage(ws, message)
+                        break
                     case 'sync':
-                        // return await syncController.handleSyncMessage(ws, message)
+                        await handleSyncMessage(ws, message)
+                        break
                     default:
-                        throw new Error('Invalid message type')
+                        throw new Error(`Invalid message type: ${message.type}`)
                 }
             } catch (err) {
                 handleError(ws, err)
