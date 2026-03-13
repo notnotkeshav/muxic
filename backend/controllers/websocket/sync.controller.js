@@ -47,6 +47,7 @@ const handlePlay = async (ws, position = 0) => {
         }
     }, { new: true })
 
+    // TODO: Enable sync session logging when needed
     // await SyncSession.logEvent(ws.roomId, 'play', ws.userId, ws.deviceId, { position })
 
     await broadcastToRoom(ws.roomId, {
@@ -67,6 +68,7 @@ const handlePause = async (ws) => {
         }
     }, { new: true })
 
+    // TODO: Enable sync session logging when needed
     // await SyncSession.logEvent(ws.roomId, 'pause', ws.userId, ws.deviceId)
 
     await broadcastToRoom(ws.roomId, {
@@ -88,6 +90,7 @@ const handleSeek = async (ws, position) => {
         }
     }, { new: true })
 
+    // TODO: Enable sync session logging when needed
     // await SyncSession.logEvent(ws.roomId, 'seek', ws.userId, ws.deviceId, { position })
 
     await broadcastToRoom(ws.roomId, {
@@ -174,22 +177,32 @@ const handleQueueClear = async (ws) => {
 }
 
 const handleTrackNext = async (ws) => {
-    const room = await Room.findOneAndUpdate({ roomId: ws.roomId }, {
-        $pop: {
-            queue: -1
-        }
-    }, { new: true })
-
-    if (!room.queue.length) {
+    const room = await Room.findOne({ roomId: ws.roomId })
+    
+    if (!room || room.queue.length === 0) {
         throw new Error('Queue is empty')
     }
 
     const nextTrack = room.queue[0]
 
+    // Update current track and remove from queue
+    const updatedRoom = await Room.findOneAndUpdate({ roomId: ws.roomId }, {
+        $set: {
+            currentTrack: nextTrack,
+            'playback.currentTime': 0,
+            'playback.isPlaying': true,
+            'playback.lastUpdated': new Date()
+        },
+        $pop: {
+            queue: -1  // Remove first item from queue
+        }
+    }, { new: true })
+
     await broadcastToRoom(ws.roomId, {
         type: 'sync:track_next',
         data: {
             track: nextTrack,
+            queueLength: updatedRoom.queue.length,
             timestamp: Date.now(),
             initiatedBy: ws.userId
         }

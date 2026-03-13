@@ -37,7 +37,7 @@ const Home = () => {
                   </li>
                   <li className="flex items-start">
                     <span className="text-emerald-500 mr-2">✓</span>
-                    <span>Supports 10+ devices simultaneously</span>
+                    <span>Supports upto 15 devices simultaneously</span>
                   </li>
                   <li className="flex items-start">
                     <span className="text-emerald-500 mr-2">✓</span>

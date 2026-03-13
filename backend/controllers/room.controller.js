@@ -193,7 +193,7 @@ export const updatePlaybackState = async (req, res, next) => {
   try {
     const { roomId } = req.params
     const playbackState = req.validated
-    const userId = req.user._id
+    const userId = req.userId
 
     const room = await Room.findById(roomId)
     if (!room) {
@@ -225,7 +225,7 @@ export const updatePlaybackState = async (req, res, next) => {
 export const skipTrack = async (req, res, next) => {
   try {
     const { roomId } = req.params
-    const userId = req.user._id
+    const userId = req.userId
 
     const room = await Room.findById(roomId)
     if (!room) {
@@ -259,7 +259,7 @@ export const setCurrentTrack = async (req, res, next) => {
   try {
     const { roomId } = req.params
     const track = req.validated
-    const userId = req.user._id
+    const userId = req.userId
 
     const room = await Room.findById(roomId)
     if (!room) {
@@ -294,7 +294,7 @@ export const addToQueue = async (req, res, next) => {
   try {
     const { roomId } = req.params
     const track = req.validated
-    const userId = req.user._id
+    const userId = req.userId
 
     const room = await Room.findById(roomId)
     if (!room) {
@@ -325,7 +325,7 @@ export const addToQueue = async (req, res, next) => {
 export const removeFromQueue = async (req, res, next) => {
   try {
     const { roomId, index } = req.params
-    const userId = req.user._id
+    const userId = req.userId
     const trackIndex = parseInt(index)
 
     const room = await Room.findById(roomId)
@@ -359,7 +359,7 @@ export const removeFromQueue = async (req, res, next) => {
 export const clearQueue = async (req, res, next) => {
   try {
     const { roomId } = req.params
-    const userId = req.user._id
+    const userId = req.userId
 
     const room = await Room.findById(roomId)
     if (!room) {

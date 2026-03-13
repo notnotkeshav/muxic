@@ -24,14 +24,18 @@ const roomMessageSchema = baseMessageSchema.extend({
 
 const syncMessageSchema = baseMessageSchema.extend({
     type: z.literal('sync'),
-    action: z.enum(['play', 'pause', 'seek', 'volume', 'next', 'queue_add', 'queue_remove', 'queue_clear']),
+    action: z.enum(['play', 'pause', 'seek', 'volume', 'track_next', 'queue_add', 'queue_remove', 'queue_clear']),
     data: z.object({
         position: z.number().min(0).optional(),
         volume: z.number().min(0).max(100).optional(),
         track: z.object({
             url: z.string().url(),
             title: z.string().min(1),
-            duration: z.number().min(0)
+            artist: z.string().optional(),
+            album: z.string().optional(),
+            duration: z.number().min(0),
+            thumbnail: z.string().url().optional(),
+            source: z.enum(['spotify', 'youtube', 'soundcloud', 'local', 'other']).optional()
         }).optional(),
         trackId: z.string().optional()
     }).optional()

@@ -16,3 +16,83 @@
         @apply bg-white dark:bg-[#222] text-gray-900 dark:text-gray-100;
     }
 }
+
+@layer components {
+    /* Range slider styles */
+    .slider {
+        appearance: none;
+        background: transparent;
+        cursor: pointer;
+    }
+
+    .slider::-webkit-slider-track {
+        background: #e5e7eb;
+        height: 4px;
+        border-radius: 2px;
+    }
+
+    .slider::-webkit-slider-thumb {
+        appearance: none;
+        background: #10b981;
+        height: 16px;
+        width: 16px;
+        border-radius: 50%;
+        cursor: pointer;
+        margin-top: -6px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        transition: all 0.2s ease;
+    }
+
+    .slider::-webkit-slider-thumb:hover {
+        background: #059669;
+        transform: scale(1.1);
+    }
+
+    .slider::-moz-range-track {
+        background: #e5e7eb;
+        height: 4px;
+        border-radius: 2px;
+        border: none;
+    }
+
+    .slider::-moz-range-thumb {
+        background: #10b981;
+        height: 16px;
+        width: 16px;
+        border-radius: 50%;
+        cursor: pointer;
+        border: none;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        transition: all 0.2s ease;
+    }
+
+    .slider::-moz-range-thumb:hover {
+        background: #059669;
+        transform: scale(1.1);
+    }
+
+    /* Dark mode slider styles */
+    [data-theme="dark"] .slider::-webkit-slider-track {
+        background: #374151;
+    }
+
+    [data-theme="dark"] .slider::-webkit-slider-thumb {
+        background: #10b981;
+    }
+
+    [data-theme="dark"] .slider::-webkit-slider-thumb:hover {
+        background: #059669;
+    }
+
+    [data-theme="dark"] .slider::-moz-range-track {
+        background: #374151;
+    }
+
+    [data-theme="dark"] .slider::-moz-range-thumb {
+        background: #10b981;
+    }
+
+    [data-theme="dark"] .slider::-moz-range-thumb:hover {
+        background: #059669;
+    }
+}
